@@ -1,17 +1,24 @@
 ---
-name: 126mail-skill
-description: Use when needing to read emails from 126 mail (NetEase mail), including fetching recent emails by days or reading specific email content with attachments information
+name: mail-skill
+description: Use when needing to read emails via IMAP protocol, including fetching recent emails by days or reading specific email content with attachments information. Supports 126 mail, enterprise mail (qiye.163.com), and any IMAP-compatible email service.
 ---
 
-# 126 Mail Skill
+# Mail Skill
 
 ## Overview
 
-读取网易126邮箱的邮件，支持两种模式：最近N天邮件列表查询和单封邮件内容读取。基于 IMAP 协议实现。
+读取邮箱邮件，基于 IMAP 协议，支持多种邮箱服务：
+
+| 邮箱类型 | IMAP 地址 |
+|----------|-----------|
+| 网易 126 | imap.126.com |
+| 163 邮箱 | imap.163.com |
+| 网易企业邮箱 | imaphz.qiye.163.com |
+| QQ 邮箱 | imap.qq.com |
 
 ## When to Use
 
-- 需要查看126邮箱的最近N天邮件
+- 需要查看邮箱的最近 N 天邮件
 - 需要读取某封邮件的完整内容
 - 需要了解邮件是否有附件
 
@@ -23,153 +30,84 @@ description: Use when needing to read emails from 126 mail (NetEase mail), inclu
 pip install imapclient python-dotenv
 ```
 
-需要在 `~/.claude/skills/126mail-skill/` 目录下创建 `.env` 文件配置邮箱账号：
+需要在 `~/.claude/skills/mail-skill/` 目录下创建 `.env` 文件配置邮箱账号：
 
 ```bash
-cd ~/.claude/skills/126mail-skill/
+cd ~/.claude/skills/mail-skill/
 touch .env
 ```
 
-`.env` 文件内容：
+`.env` 文件内容（根据你的邮箱类型选择对应的 IMAP 地址）：
 
 ```env
-MAIL_126_ADDR=your_email@126.com
-MAIL_126_PASSWORD=your_auth_code
+# IMAP 服务器地址
+MAIL_IMAP_ADDR=imap.qq.com
+
+# 邮箱地址
+MAIL_USER_ADDR=your_email@qq.com
+
+# 授权码（不是登录密码）
+MAIL_USER_PASSWORD=your_auth_code
 ```
 
-**授权码获取：** 登录126邮箱 → 设置 → POP3/SMTP/IMAP → 开启IMAP服务 → 生成授权码
+**授权码获取方式：**
+
+| 邮箱类型 | 获取路径 |
+|----------|----------|
+| 126/163 | 登录邮箱 → 设置 → POP3/SMTP/IMAP → 开启 IMAP 服务 → 生成授权码 |
+| 网易企业邮箱 | 登录邮箱网页版 → 设置 → POP3/SMTP/IMAP → 生成授权码 |
+| QQ 邮箱 | 设置 → 账户 → POP3/SMTP服务 → 开启服务 → 生成授权码 |
 
 ## Core Functions
 
-### 1. 获取最近N天邮件列表
+### 1. 获取最近 N 天邮件列表
 
 ```python
-from imapclient import IMAPClient
-import email
-from datetime import datetime, timedelta
+from mail126 import fetch_recent_emails_126
 
-def fetch_recent_emails_126(
-    email_addr: str,
-    password: str,
-    days: int = 7,
-    max_count: int = 50
-) -> list[dict]:
-    """
-    获取最近N天的邮件列表
-
-    Args:
-        email_addr: 126邮箱地址
-        password: 授权码（不是登录密码）
-        days: 最近天数
-        max_count: 最大返回数量
-
-    Returns:
-        邮件列表，每封邮件包含: subject, from, date, has_attachment, uid
-    """
-    server = IMAPClient('imap.126.com', ssl=True)
-    server.login(email_addr, password)
-
-    server.select_folder('INBOX')
-
-    since_date = (datetime.now() - timedelta(days=days)).strftime('%d-%b-%Y')
-    messages = server.search(['SINCE', since_date])
-
-    emails = []
-    for uid in messages[-max_count:]:
-        status, msg_data = server.fetch(uid, '(ENVELOPE RFC822.SIZE)')
-        raw_email = msg_data[uid][b'RFC822']
-        msg = email.message_from_bytes(raw_email)
-
-        has_attachment = any(
-            part.get_content_disposition() == 'ATTACHMENT'
-            for part in msg.walk()
-        )
-
-        emails.append({
-            'uid': uid,
-            'subject': msg['Subject'] or '(无主题)',
-            'from': msg['From'],
-            'date': msg['Date'],
-            'has_attachment': has_attachment
-        })
-
-    server.logout()
-    return emails
+emails = fetch_recent_emails_126(email_addr, password, days=7)
 ```
+
+返回邮件列表，每封邮件包含 **5 个必需字段**：
+- `uid`: 邮件唯一标识
+- `subject`: 邮件主题
+- `from`: 发件人
+- `date`: 收件时间 (datetime)
+- `has_attachment`: 是否有附件 (bool)
+
+可选字段：
+- `attachments`: 附件文件名列表
+- `cc`: 抄送地址列表
 
 ### 2. 读取单封邮件内容
 
 ```python
-def fetch_email_content_126(
-    email_addr: str,
-    password: str,
-    uid: int
-) -> dict:
-    """
-    读取指定邮件的完整内容
+from mail126 import fetch_email_content_126
 
-    Args:
-        email_addr: 126邮箱地址
-        password: 授权码
-        uid: 邮件UID
-
-    Returns:
-        邮件内容包含: subject, from, date, body, html_body, attachments
-    """
-    server = IMAPClient('imap.126.com', ssl=True)
-    server.login(email_addr, password)
-    server.select_folder('INBOX')
-
-    status, msg_data = server.fetch(uid, '(RFC822)')
-    raw_email = msg_data[uid][b'RFC822']
-    msg = email.message_from_bytes(raw_email)
-
-    body = ''
-    html_body = ''
-    attachments = []
-
-    if msg.is_multipart():
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            disposition = part.get_content_disposition()
-
-            if disposition == 'ATTACHMENT':
-                attachments.append({
-                    'filename': part.get_filename(),
-                    'size': len(part.get_payload())
-                })
-            elif content_type == 'text/plain':
-                body = part.get_payload(decode=True).decode('utf-8', errors='replace')
-            elif content_type == 'text/html':
-                html_body = part.get_payload(decode=True).decode('utf-8', errors='replace')
-    else:
-        body = msg.get_payload(decode=True).decode('utf-8', errors='replace')
-
-    server.logout()
-
-    return {
-        'subject': msg['Subject'],
-        'from': msg['From'],
-        'date': msg['Date'],
-        'body': body,
-        'html_body': html_body,
-        'attachments': attachments
-    }
+content = fetch_email_content_126(email_addr, password, uid)
 ```
+
+返回邮件内容，包含：
+- `subject`: 主题
+- `from`: 发件人
+- `date`: 时间
+- `body`: 纯文本正文
+- `html_body`: HTML 正文
+- `attachments`: 附件列表
 
 ## Quick Reference
 
 | 功能 | 函数 | 必需参数 |
 |------|------|----------|
-| 最近N天邮件 | `fetch_recent_emails_126` | email_addr, password, days |
+| 最近 N 天邮件 | `fetch_recent_emails_126` | email_addr, password, days |
 | 单封邮件内容 | `fetch_email_content_126` | email_addr, password, uid |
 
 ## Common Mistakes
 
 ### 1. 使用登录密码而非授权码
 
-126邮箱必须使用授权码登录，授权码需要在邮箱设置中生成：
-- 登录126邮箱 → 设置 → POP3/SMTP/IMAP → 开启服务 → 生成授权码
+邮箱必须使用授权码登录，授权码需要在邮箱设置中生成：
+- 登录邮箱 → 设置 → POP3/SMTP/IMAP → 开启服务 → 生成授权码
 
 ### 2. 未处理附件判断
 
@@ -189,17 +127,13 @@ def fetch_email_content_126(
 from dotenv import load_dotenv
 import os
 
-load_dotenv('/Users/colinspace/.claude/skills/126mail-skill/.env')
+load_dotenv('/Users/colinspace/.claude/skills/mail-skill/.env')
 
-email_addr = os.getenv('MAIL_126_ADDR')
-password = os.getenv('MAIL_126_PASSWORD')
+email_addr = os.getenv('MAIL_USER_ADDR')
+password = os.getenv('MAIL_USER_PASSWORD')
 
-# 获取最近7天的邮件
-emails = fetch_recent_emails_126(
-    email_addr=email_addr,
-    password=password,
-    days=7
-)
+# 获取最近 7 天的邮件
+emails = fetch_recent_emails_126(email_addr, password, days=7)
 
 for email in emails:
     print(f"主题: {email['subject']}")
@@ -209,28 +143,30 @@ for email in emails:
     print('---')
 
 # 读取特定邮件内容
-content = fetch_email_content_126(
-    email_addr=email_addr,
-    password=password,
-    uid=12345
-)
+content = fetch_email_content_126(email_addr, password, uid=12345)
 print(content['body'])
 ```
 
 ## .env 配置文件
 
-在 `~/.claude/skills/126mail-skill/` 目录下创建 `.env` 文件：
+在 `~/.claude/skills/mail-skill/` 目录下创建 `.env` 文件：
 
 ```bash
-cd ~/.claude/skills/126mail-skill/
+cd ~/.claude/skills/mail-skill/
 touch .env
 ```
 
 编辑 `.env` 文件，添加以下配置：
 
 ```env
-MAIL_126_ADDR=your_email@126.com
-MAIL_126_PASSWORD=your_auth_code
+# IMAP 服务器地址
+MAIL_IMAP_ADDR=imaphz.qiye.163.com
+
+# 邮箱地址
+MAIL_USER_ADDR=your_email@company.com
+
+# 授权码（不是登录密码）
+MAIL_USER_PASSWORD=your_auth_code
 ```
 
 **注意：** `.env` 文件包含敏感信息，不要提交到 git 仓库。
@@ -243,10 +179,11 @@ MAIL_126_PASSWORD=your_auth_code
 from dotenv import load_dotenv
 import os
 
-load_dotenv('/Users/colinspace/.claude/skills/126mail-skill/.env')
+load_dotenv('/Users/colinspace/.claude/skills/mail-skill/.env')
 
-email_addr = os.getenv('MAIL_126_ADDR')
-password = os.getenv('MAIL_126_PASSWORD')
+email_addr = os.getenv('MAIL_USER_ADDR')
+password = os.getenv('MAIL_USER_PASSWORD')
+imap_server = os.getenv('MAIL_IMAP_ADDR')
 ```
 
 安装 dotenv：

@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
 """
-126邮箱读取工具
-基于 IMAP 协议读取网易126邮件
+邮件读取工具
+基于 IMAP 协议读取邮箱邮件，支持 126邮箱、网易企业邮箱等各种 IMAP 兼容邮箱
 
 使用前需要：
-1. 开启 IMAP 服务：登录126邮箱 -> 设置 -> POP3/SMTP/IMAP -> 开启IMAP服务
+1. 开启 IMAP 服务：登录邮箱 -> 设置 -> POP3/SMTP/IMAP -> 开启IMAP服务
 2. 获取授权码：设置中生成授权码（不是登录密码）
+3. 配置 .env 文件：
+   - MAIL_IMAP_ADDR: IMAP 服务器地址
+   - MAIL_USER_ADDR: 邮箱地址
+   - MAIL_USER_PASSWORD: 授权码
 """
 
 import os
 from imapclient import IMAPClient
 import email
-from datetime import datetime, timedelta
-from typing import Optional
-
-from imapclient import IMAPClient
-import email.utils
 import email.header
+import email.utils
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+
+DEFAULT_IMAP_126 = 'imap.126.com'
+
+def get_imap_server():
+    """获取 IMAP 服务器地址，从环境变量 MAIL_IMAP_ADDR 读取"""
+    return os.getenv('MAIL_IMAP_ADDR') or DEFAULT_IMAP_126
 
 def decode_imap_utf7(s: Optional[str]) -> Optional[str]:
     """将 IMAP 修改的 UTF-7 字符串转为普通字符串"""
@@ -113,6 +119,8 @@ def decode_header_value(value) -> str:
         return ""
     if isinstance(value, tuple):
         return decode_address(value[0]) if value else ""
+    if hasattr(value, 'name') or hasattr(value, 'mailbox'):
+        return decode_address(value)
     if isinstance(value, bytes):
         value = value.decode('utf-8')
     if value.startswith('=?'):
@@ -172,7 +180,7 @@ def fetch_recent_emails_126(email: str, password: str, days: int = 7) -> List[Di
         'attachments' : List[str] (附件文件名列表)
         'cc' : List[str] (抄送地址，每个地址为字符串)
     """
-    with IMAPClient("imap.126.com", use_uid=True) as server:
+    with IMAPClient(get_imap_server(), use_uid=True) as server:
         server.login(email, password)
         # 绕过 "Unsafe Login"
         server.id_({"name": "MyMailFetcher", "version": "2.0"})
@@ -205,13 +213,8 @@ def fetch_recent_emails_126(email: str, password: str, days: int = 7) -> List[Di
                 else:
                     subject = decode_header_value(subject_raw)
                 
-                # 日期字符串
-                date_str = envelope.date or ""
-                # 解析为标准 datetime
-                try:
-                    date_obj = email.utils.parsedate_to_datetime(date_str)
-                except:
-                    date_obj = datetime.now()
+                # 日期（envelope.date 是 datetime 对象，表示邮件发送时间）
+                date_obj = envelope.date if isinstance(envelope.date, datetime) else datetime.now()
                 
                 # 抄送：envelope.cc 是 list of tuples
                 cc_list = []
@@ -251,7 +254,7 @@ def fetch_email_content_126(account: str, password: str, uid: int) -> Dict:
     :param uid: 邮件的 UID
     :return: 包含 subject, from, date, body, html_body, attachments 的字典
     """
-    with IMAPClient("imap.126.com", use_uid=True) as server:
+    with IMAPClient(get_imap_server(), use_uid=True) as server:
         server.login(account, password)
         server.id_({"name": "MyMailFetcher", "version": "2.0"})
         server.select_folder('INBOX')
@@ -303,14 +306,16 @@ if __name__ == '__main__':
     dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
     load_dotenv(dotenv_path)
 
-    email_addr = os.getenv('MAIL_126_ADDR')
-    password = os.getenv('MAIL_126_PASSWORD')
+    email_addr = os.getenv('MAIL_USER_ADDR')
+    password = os.getenv('MAIL_USER_PASSWORD')
 
     if not email_addr or not password:
-        print("请设置环境变量: MAIL_126_ADDR, MAIL_126_PASSWORD")
+        print("请设置环境变量: MAIL_USER_ADDR, MAIL_USER_PASSWORD")
         exit(1)
 
-    print("=== 最近7天邮件列表 ===")
+    print(f"IMAP Server: {get_imap_server()}")
+    print(f"Email: {email_addr}")
+    print("=== 最近3天邮件列表 ===")
     emails = fetch_recent_emails_126(email_addr, password, days=3)
     for e in emails:
         print(f"[{e['uid']}] {e['subject']} | {e['from']} | {e['date']} | 附件: {e['has_attachment']}")
